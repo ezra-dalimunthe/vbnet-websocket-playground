@@ -23,6 +23,7 @@ Class Program
            
         Catch ex As Exception
             Console.WriteLine("Error occured: " & ex.Message)
+            Console.WriteLine(ex.StackTrace)
         finally
             WsServer.Stop()
         End Try
