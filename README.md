@@ -30,6 +30,13 @@ dotnet run
 ```
 after the server running, try to send messages to this server. you can use following clients
 
+* Server Echo Page
+  
+  This is html page served by this server
+
+  * location: http://localhost:1001
+  
+
 * [websocket.org Echo Test - Powered by Kaazing](https://www.websocket.org/echo.html)
   * set location to ws://localhost:1001 . 
   * make a connection to server, 
