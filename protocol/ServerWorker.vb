@@ -2,13 +2,14 @@
 Imports System.Net
 Imports System.Text
 Imports System.Text.RegularExpressions
+Imports System.IO
 Public Class ServerWorker
-
+    Private Property webroot As String
     Dim _TcpClient As System.Net.Sockets.TcpClient
     Dim _ClientID As String
     Dim _ClientIP As String
     Private processor As FrameDataProcessor
-
+    Private dct As Dictionary(Of String, String)
     Public ReadOnly Property ClientId As String
         Get
             Return _ClientID
@@ -27,31 +28,29 @@ Public Class ServerWorker
     Public Event onClientDataAvailable As OnClientDataAvailableDelegateHandler
 
     Sub New(ByVal tcpClient As System.Net.Sockets.TcpClient)
-        Dim l As New LingerOption(False, 20)
+        Dim l As New LingerOption(True, 10)
         processor = New FrameDataProcessor
         tcpClient.Client.LingerState = l
         Me._TcpClient = tcpClient
         _ClientIP = DirectCast(Me._TcpClient.Client.RemoteEndPoint, IPEndPoint).Address.ToString()
+        webroot = "./webroot"
+        populateMimeType()
     End Sub
 
 
     Function isConnected() As Boolean
         Return Me._TcpClient.Client.Connected
     End Function
-    Sub CloseConnection(Optional ByVal code As UInt16 = 0, Optional ByVal reason As String = "")
-
-        If code <> 0 Then
-            Dim encoder = New Text.UTF8Encoding
-            Dim ls As New List(Of Byte)
-            Dim bcode = BitConverter.GetBytes(code)
-            Array.Reverse(bcode)
-            ls.AddRange(bcode)
-            Dim msg = encoder.GetBytes(reason)
-            ls.AddRange(msg)
-            Dim frame = processor.MakeFrame(ls.ToArray, WsOpcode.ConnectionClose)
-            WriteStream(frame)
-        End If
-
+    Sub CloseConnection(Optional ByVal code As UInt16 = 1000, Optional ByVal reason As String = "")
+        Dim encoder = New Text.UTF8Encoding
+        Dim ls As New List(Of Byte)
+        Dim bcode = BitConverter.GetBytes(code)
+        Array.Reverse(bcode)
+        ls.AddRange(bcode)
+        Dim msg = encoder.GetBytes(reason)
+        ls.AddRange(msg)
+        Dim frame = processor.MakeFrame(ls.ToArray, WsOpcode.ConnectionClose)
+        WriteStream(frame)
         If Me.isConnected Then
             Me._TcpClient.Client.Disconnect(False)
             Me._TcpClient.Client.Close()
@@ -75,7 +74,7 @@ Public Class ServerWorker
                 HandshakeHeader = System.Text.Encoding.UTF8.GetString(bytes)
             End If
 
-           
+
             Dim isGetMethod = New Text.RegularExpressions.Regex("^GET").IsMatch(HandshakeHeader)
             Dim isWebSocketRequest = New Text.RegularExpressions.Regex("Upgrade: (.*)").Match(HandshakeHeader).
                 Groups(1).Value().Trim().Equals("websocket", StringComparison.InvariantCultureIgnoreCase)
@@ -106,29 +105,52 @@ Public Class ServerWorker
                 WriteStream(response)
             Else
                 'We're going to disconnect the client here, because the client's not handshaking properly 
+                'simple html server to serve http GET request
                 Dim rgx = New Text.RegularExpressions.Regex("GET\s/(?<qs>.*)\sHTTP")
                 Dim m = rgx.Matches(HandshakeHeader)
                 If m.Count > 0 Then
-                    Dim qs = m(0).Groups("qs").Value
 
+                    Dim filepath = m(0).Groups("qs").Value
+                    If String.IsNullOrEmpty(filepath) Then
+                        filepath = "index.html"
+                    End If
+                    Dim fullpath = Path.GetFullPath(Path.Join(webroot, filepath))
                     Dim htmlContent As New StringBuilder
                     Dim htmlHeader As New StringBuilder
-                    'TODO: response with html file(s).
-                    If qs.Equals("") Then
+                    Dim content As Byte()
+
+                    If File.Exists(fullpath) Then
                         htmlHeader.AppendLine("HTTP/1.1 200 OK")
-                        htmlContent.AppendLine("This is websocket server")
+                        content = File.ReadAllBytes(fullpath)
+
+                        Dim fileextension = Path.GetExtension(fullpath)
+                        Dim mimetype As String = String.Empty
+
+                        dct.TryGetValue(fileextension, mimetype)
+                        If mimetype Is Nothing Then
+                            mimetype = "text/plain"
+                        End If
+
+                        htmlHeader.AppendLine("Content-type: " & mimetype)
+                        htmlHeader.AppendLine("Content-length: " & content.Count.ToString())
+                        htmlHeader.AppendLine(String.Format("Date: {0:r}", Date.Now.ToUniversalTime()))
+                        htmlHeader.AppendLine(String.Format("expires: {0:r}", Date.Now.AddDays(-1).ToUniversalTime()))
+
+                        htmlHeader.AppendLine()
+                        htmlContent.Append(content)
                     Else
                         htmlHeader.AppendLine("HTTP/1.1 404 NOT FOUND")
-                        htmlContent.AppendLine("NOT FOUND")
                     End If
 
-                    htmlHeader.AppendLine(String.Format("Date: {0:r}", Date.Now.ToUniversalTime()))
-                    htmlHeader.AppendLine("Content-Type: text/plain; charset=UTF-8")
-                    htmlHeader.AppendLine("Content-Length: " & htmlContent.Length.ToString())
-                    htmlHeader.AppendLine()
+
+
+
 
                     WriteStream(Encoding.UTF8.GetBytes(htmlHeader.ToString()))
-                    WriteStream(Encoding.UTF8.GetBytes(htmlContent.ToString()))
+                    If content IsNot Nothing Then
+                        WriteStream(content)
+                    End If
+
 
 
                 End If
@@ -152,7 +174,7 @@ Public Class ServerWorker
                 If stream.CanWrite Then
                     stream.Write(b, 0, b.Length)
                 End If
-
+                stream.Flush()
 
             Catch ex As Exception
 
@@ -182,14 +204,13 @@ Public Class ServerWorker
                     Dim pong = processor.BuildPong(frame.PlainPayload)
                     WriteStream(pong)
                 Case Is = WsOpcode.Pong
-                    'do nothing by now
                 Case Is = WsOpcode.ConnectionClose
                     Dim reason = processor.DecodeCloseMessage(streamData)
                     'for debug only
                     Console.WriteLine("Closed:{0}", reason)
 
                     WriteStream({136})
-                    ' CloseConnection()
+                    CloseConnection(1000)
                 Case Else
                     CloseConnection(1002, "Invalid opcode")
             End Select
@@ -198,6 +219,21 @@ Public Class ServerWorker
         End If
 
 
+    End Sub
+    ''' <summary>
+    ''' populate dictionary of mimetype
+    ''' ?? perhaps it's better to put it on setting file ??
+    ''' </summary>
+    Private Sub populateMimeType()
+        dct = New Dictionary(Of String, String)
+        dct.Add(".html", "text/html; charset=utf-8")
+        dct.Add(".js", "application/javascript; charset=utf-8")
+        dct.Add(".css", "text/css; charset=utf-8")
+        dct.Add(".png", "image/png")
+        dct.Add(".jpg", "image/jpg")
+        dct.Add(".ico", "image/ vnd.microsoft.icon")
+
+        '...more
     End Sub
 End Class
 

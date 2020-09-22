@@ -76,13 +76,13 @@ Public Class WebSocketServer
         If ClientDataAvailableTimer.Enabled = False Then
             ClientDataAvailableTimer.Start()
         End If
-        Console.WriteLine("connected: {0}", client.ClientIP)
+
 
     End Sub
 
 
     Sub Client_Disconnected(ByVal ClientId As String)
-        Console.WriteLine("disconnected {0}", ClientId)
+
     End Sub
 
 
