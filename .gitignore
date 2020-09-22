@@ -35,3 +35,4 @@ msbuild.wrn
 
 .vs/
 .editorconfig
+*.bak
